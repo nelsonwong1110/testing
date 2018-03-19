@@ -1,9 +1,11 @@
 import React, { Component } from 'react';
+import DataTable from './DataTable';
 class HomePage extends Component {
   render() {
     return (
       <div>
-        Home page
+        Homemateeee
+        <DataTable />
       </div>
     )
   }
