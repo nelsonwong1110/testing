@@ -2,55 +2,94 @@
 	MIT License http://www.opensource.org/licenses/mit-license.php
 	Author Tobias Koppers @sokra
 */
-var ModuleDependency = require("./ModuleDependency");
+"use strict";
+const ModuleDependency = require("./ModuleDependency");
+const Template = require("../Template");
 
-function HarmonyImportDependency(request, importedVar, range) {
-	ModuleDependency.call(this, request);
-	this.range = range;
-	this.importedVar = importedVar;
+class HarmonyImportDependency extends ModuleDependency {
+	constructor(request, originModule, sourceOrder, parserScope) {
+		super(request);
+		this.originModule = originModule;
+		this.sourceOrder = sourceOrder;
+		this.parserScope = parserScope;
+	}
+
+	getReference() {
+		if (!this.module) return null;
+
+		return {
+			module: this.module,
+			importedNames: false,
+			weak: this.weak
+		};
+	}
+
+	getImportVar() {
+		let importVarMap = this.parserScope.importVarMap;
+		if (!importVarMap) this.parserScope.importVarMap = importVarMap = new Map();
+		let importVar = importVarMap.get(this.module);
+		if (importVar) return importVar;
+		importVar = `${Template.toIdentifier(
+			`${this.userRequest}`
+		)}__WEBPACK_IMPORTED_MODULE_${importVarMap.size}__`;
+		importVarMap.set(this.module, importVar);
+		return importVar;
+	}
+
+	getImportStatement(update, runtime) {
+		return runtime.importStatement({
+			update,
+			module: this.module,
+			importVar: this.getImportVar(),
+			request: this.request,
+			originModule: this.originModule
+		});
+	}
+
+	updateHash(hash) {
+		super.updateHash(hash);
+		const importedModule = this.module;
+		hash.update(
+			(importedModule &&
+				(!importedModule.buildMeta || importedModule.buildMeta.exportsType)) +
+				""
+		);
+		hash.update((importedModule && importedModule.id) + "");
+	}
 }
+
 module.exports = HarmonyImportDependency;
 
-HarmonyImportDependency.prototype = Object.create(ModuleDependency.prototype);
-HarmonyImportDependency.prototype.constructor = HarmonyImportDependency;
-HarmonyImportDependency.prototype.type = "harmony import";
+const importEmittedMap = new WeakMap();
 
-HarmonyImportDependency.prototype.getReference = function() {
-	if(!this.module) return null;
-	return {
-		module: this.module,
-		importedNames: false
-	};
-};
+HarmonyImportDependency.Template = class HarmonyImportDependencyTemplate {
+	apply() {}
 
-HarmonyImportDependency.prototype.updateHash = function updateHash(hash) {
-	ModuleDependency.prototype.updateHash.call(this, hash);
-	hash.update((this.module && (!this.module.meta || this.module.meta.harmonyModule)) + "");
-};
-
-HarmonyImportDependency.makeStatement = function(declare, dep, outputOptions, requestShortener) {
-	var comment = "";
-	if(outputOptions.pathinfo) comment = "/*! " + requestShortener.shorten(dep.request) + " */ ";
-	var declaration = declare ? "var " : "";
-	var newline = declare ? "\n" : " ";
-	var content;
-	if(!dep.module) {
-		content = "throw new Error(" + JSON.stringify("Cannot find module \"" + dep.request + "\"") + ");" + newline;
-	} else if(dep.importedVar) {
-		content = "/* harmony import */ " + declaration + dep.importedVar + " = __webpack_require__(" + comment + JSON.stringify(dep.module.id) + ");" + newline;
-		if(!(dep.module.meta && dep.module.meta.harmonyModule)) {
-			content += "/* harmony import */ " + declaration + dep.importedVar + "_default = __webpack_require__.n(" + dep.importedVar + ");" + newline;
-		}
-	} else {
-		content = "";
+	getHarmonyInitOrder(dep) {
+		return dep.sourceOrder;
 	}
-	return content;
-};
 
-HarmonyImportDependency.Template = function HarmonyImportDependencyTemplate() {};
+	static isImportEmitted(dep, source) {
+		let sourceInfo = importEmittedMap.get(source);
+		if (!sourceInfo) return false;
+		const key = dep.module || dep.request;
+		return key && sourceInfo.emittedImports.get(key);
+	}
 
-HarmonyImportDependency.Template.prototype.apply = function(dep, source, outputOptions, requestShortener) {
-	var content = HarmonyImportDependency.makeStatement(true, dep, outputOptions, requestShortener);
-	source.replace(dep.range[0], dep.range[1] - 1, "");
-	source.insert(-1, content);
+	harmonyInit(dep, source, runtime) {
+		let sourceInfo = importEmittedMap.get(source);
+		if (!sourceInfo) {
+			importEmittedMap.set(
+				source,
+				(sourceInfo = {
+					emittedImports: new Map()
+				})
+			);
+		}
+		const key = dep.module || dep.request;
+		if (key && sourceInfo.emittedImports.get(key)) return;
+		sourceInfo.emittedImports.set(key, true);
+		const content = dep.getImportStatement(false, runtime);
+		source.insert(-1, content);
+	}
 };
